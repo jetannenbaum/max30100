@@ -11,9 +11,11 @@ For more information, see the README from the parent repository (https://github.
 Useful information:
 
 MicroPython I2C Documentation
+
 http://docs.micropython.org/en/latest/library/machine.I2C.html
 
 MAX30100 Datasheet
+
 https://datasheets.maximintegrated.com/en/ds/MAX30100.pdf
 
 
