@@ -5,9 +5,16 @@
   https: // github.com / kontakt / MAX30100
 
   September 2017
+
+  Ported to MicroPython on April 2020 by Rafael Aroca <aroca@ufscar.br>
+
+  See test.py for test program
+
 """
 
-import smbus
+import machine
+from machine import Pin
+from machine import I2C
 
 INT_STATUS   = 0x00  # Which interrupts are tripped
 INT_ENABLE   = 0x01  # Which interrupts are active
@@ -96,8 +103,16 @@ class MAX30100(object):
                  max_buffer_len=10000
                  ):
 
+        self.xmit_data = bytearray(1)
+
+
         # Default to the standard I2C bus on Pi.
-        self.i2c = i2c if i2c else smbus.SMBus(1)
+        #sda=Pin(4)
+        #scl=Pin(5)             
+        #i2c = I2C(scl=scl,sda=sda)
+        #i2c.scan()
+
+        self.i2c = i2c 
 
         self.set_mode(MODE_HR)  # Trigger an initial temperature read.
         self.set_led_current(led_current_red, led_current_ir)
@@ -109,6 +124,10 @@ class MAX30100(object):
 
         self.max_buffer_len = max_buffer_len
         self._interrupt = None
+
+    def i2c_write(self, addr, reg, value):
+        self.xmit_data[0] = value
+        self.i2c.writeto_mem(addr, reg, self.xmit_data)
 
     @property
     def red(self):
@@ -122,17 +141,17 @@ class MAX30100(object):
         # Validate the settings, convert to bit values.
         led_current_red = _get_valid(LED_CURRENT, led_current_red)
         led_current_ir = _get_valid(LED_CURRENT, led_current_ir)
-        self.i2c.write_byte_data(I2C_ADDRESS, LED_CONFIG, (led_current_red << 4) | led_current_ir)
+        self.i2c_write(I2C_ADDRESS, LED_CONFIG, (led_current_red << 4) | led_current_ir)
 
     def set_mode(self, mode):
-        reg = self.i2c.read_byte_data(I2C_ADDRESS, MODE_CONFIG)
-        self.i2c.write_byte_data(I2C_ADDRESS, MODE_CONFIG, reg & 0x74) # mask the SHDN bit
-        self.i2c.write_byte_data(I2C_ADDRESS, MODE_CONFIG, reg | mode)
+        reg = self.i2c.readfrom_mem(I2C_ADDRESS, MODE_CONFIG,1)[0]
+        self.i2c_write(I2C_ADDRESS, MODE_CONFIG, reg & 0x74) # mask the SHDN bit
+        self.i2c_write(I2C_ADDRESS, MODE_CONFIG, reg | mode)
 
     def set_spo_config(self, sample_rate=100, pulse_width=1600):
-        reg = self.i2c.read_byte_data(I2C_ADDRESS, SPO2_CONFIG)
+        reg = self.i2c.readfrom_mem(I2C_ADDRESS, SPO2_CONFIG,1)[0]
         reg = reg & 0xFC  # Set LED pulsewidth to 00
-        self.i2c.write_byte_data(I2C_ADDRESS, SPO2_CONFIG, reg | pulse_width)
+        self.i2c_write(I2C_ADDRESS, SPO2_CONFIG, reg | pulse_width)
 
     def enable_spo2(self):
         self.set_mode(MODE_SPO2)
@@ -141,16 +160,17 @@ class MAX30100(object):
         self.set_mode(MODE_HR)
 
     def enable_interrupt(self, interrupt_type):
-        self.i2c.write_byte_data(I2C_ADDRESS, INT_ENABLE, (interrupt_type + 1)<<4)
-        self.i2c.read_byte_data(I2C_ADDRESS, INT_STATUS)
+        self.i2c_write(I2C_ADDRESS, INT_ENABLE, (interrupt_type + 1)<<4)
+        self.i2c.readfrom_mem(I2C_ADDRESS, INT_STATUS,1)[0]
 
     def get_number_of_samples(self):
-        write_ptr = self.i2c.read_byte_data(I2C_ADDRESS, FIFO_WR_PTR)
-        read_ptr = self.i2c.read_byte_data(I2C_ADDRESS, FIFO_RD_PTR)
+        write_ptr = self.i2c.readfrom_mem(I2C_ADDRESS, FIFO_WR_PTR,1)[0]
+        read_ptr = self.i2c.readfrom_mem(I2C_ADDRESS, FIFO_RD_PTR,1)[0]
         return abs(16+write_ptr - read_ptr) % 16
 
     def read_sensor(self):
-        bytes = self.i2c.read_i2c_block_data(I2C_ADDRESS, FIFO_DATA, 4)
+        #bytes = self.i2c.read_i2c_block_data(I2C_ADDRESS, FIFO_DATA, 4)
+        bytes = self.i2c.readfrom_mem(I2C_ADDRESS, FIFO_DATA, 4)
         # Add latest values.
         self.buffer_ir.append(bytes[0]<<8 | bytes[1])
         self.buffer_red.append(bytes[2]<<8 | bytes[3])
@@ -159,41 +179,41 @@ class MAX30100(object):
         self.buffer_ir = self.buffer_ir[-self.max_buffer_len:]
 
     def shutdown(self):
-        reg = self.i2c.read_byte_data(I2C_ADDRESS, MODE_CONFIG)
-        self.i2c.write_byte_data(I2C_ADDRESS, MODE_CONFIG, reg | 0x80)
+        reg = self.i2c.readfrom_mem(I2C_ADDRESS, MODE_CONFIG,1)[0]
+        self.i2c_write(I2C_ADDRESS, MODE_CONFIG, reg | 0x80)
 
     def reset(self):
-        reg = self.i2c.read_byte_data(I2C_ADDRESS, MODE_CONFIG)
-        self.i2c.write_byte_data(I2C_ADDRESS, MODE_CONFIG, reg | 0x40)
+        reg = self.i2c.readfrom_mem(I2C_ADDRESS, MODE_CONFIG,1)[0]
+        self.i2c_write(I2C_ADDRESS, MODE_CONFIG, reg | 0x40)
 
     def refresh_temperature(self):
-        reg = self.i2c.read_byte_data(I2C_ADDRESS, MODE_CONFIG)
-        self.i2c.write_byte_data(I2C_ADDRESS, MODE_CONFIG, reg | (1 << 3))
+        reg = self.i2c.readfrom_mem(I2C_ADDRESS, MODE_CONFIG,1)[0]
+        self.i2c_write(I2C_ADDRESS, MODE_CONFIG, reg | (1 << 3))
 
     def get_temperature(self):
-        intg = _twos_complement(self.i2c.read_byte_data(I2C_ADDRESS, TEMP_INTG))
-        frac = self.i2c.read_byte_data(I2C_ADDRESS, TEMP_FRAC)
+        intg = _twos_complement(self.i2c.readfrom_mem(I2C_ADDRESS, TEMP_INTG,1)[0])
+        frac = self.i2c.readfrom_mem(I2C_ADDRESS, TEMP_FRAC,1)[0]
         return intg + (frac * 0.0625)
 
     def get_rev_id(self):
-        return self.i2c.read_byte_data(I2C_ADDRESS, REV_ID)
+        return self.i2c.readfrom_mem(I2C_ADDRESS, REV_ID,1)[0]
 
     def get_part_id(self):
-        return self.i2c.read_byte_data(I2C_ADDRESS, PART_ID)
+        return self.i2c.readfrom_mem(I2C_ADDRESS, PART_ID,1)[0]
 
     def get_registers(self):
         return {
-            "INT_STATUS": self.i2c.read_byte_data(I2C_ADDRESS, INT_STATUS),
-            "INT_ENABLE": self.i2c.read_byte_data(I2C_ADDRESS, INT_ENABLE),
-            "FIFO_WR_PTR": self.i2c.read_byte_data(I2C_ADDRESS, FIFO_WR_PTR),
-            "OVRFLOW_CTR": self.i2c.read_byte_data(I2C_ADDRESS, OVRFLOW_CTR),
-            "FIFO_RD_PTR": self.i2c.read_byte_data(I2C_ADDRESS, FIFO_RD_PTR),
-            "FIFO_DATA": self.i2c.read_byte_data(I2C_ADDRESS, FIFO_DATA),
-            "MODE_CONFIG": self.i2c.read_byte_data(I2C_ADDRESS, MODE_CONFIG),
-            "SPO2_CONFIG": self.i2c.read_byte_data(I2C_ADDRESS, SPO2_CONFIG),
-            "LED_CONFIG": self.i2c.read_byte_data(I2C_ADDRESS, LED_CONFIG),
-            "TEMP_INTG": self.i2c.read_byte_data(I2C_ADDRESS, TEMP_INTG),
-            "TEMP_FRAC": self.i2c.read_byte_data(I2C_ADDRESS, TEMP_FRAC),
-            "REV_ID": self.i2c.read_byte_data(I2C_ADDRESS, REV_ID),
-            "PART_ID": self.i2c.read_byte_data(I2C_ADDRESS, PART_ID),
+            "INT_STATUS": self.i2c.readfrom_mem(I2C_ADDRESS, INT_STATUS,1)[0],
+            "INT_ENABLE": self.i2c.readfrom_mem(I2C_ADDRESS, INT_ENABLE,1)[0],
+            "FIFO_WR_PTR": self.i2c.readfrom_mem(I2C_ADDRESS, FIFO_WR_PTR,1)[0],
+            "OVRFLOW_CTR": self.i2c.readfrom_mem(I2C_ADDRESS, OVRFLOW_CTR,1)[0],
+            "FIFO_RD_PTR": self.i2c.readfrom_mem(I2C_ADDRESS, FIFO_RD_PTR,1)[0],
+            "FIFO_DATA": self.i2c.readfrom_mem(I2C_ADDRESS, FIFO_DATA,1)[0],
+            "MODE_CONFIG": self.i2c.readfrom_mem(I2C_ADDRESS, MODE_CONFIG,1)[0],
+            "SPO2_CONFIG": self.i2c.readfrom_mem(I2C_ADDRESS, SPO2_CONFIG,1)[0],
+            "LED_CONFIG": self.i2c.readfrom_mem(I2C_ADDRESS, LED_CONFIG,1)[0],
+            "TEMP_INTG": self.i2c.readfrom_mem(I2C_ADDRESS, TEMP_INTG,1)[0],
+            "TEMP_FRAC": self.i2c.readfrom_mem(I2C_ADDRESS, TEMP_FRAC,1)[0],
+            "REV_ID": self.i2c.readfrom_mem(I2C_ADDRESS, REV_ID,1)[0],
+            "PART_ID": self.i2c.readfrom_mem(I2C_ADDRESS, PART_ID,1)[0],
         }
