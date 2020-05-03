@@ -19,3 +19,6 @@ MAX30100 Datasheet
 https://datasheets.maximintegrated.com/en/ds/MAX30100.pdf
 
 
+Good information about Heart Rate Sensors
+
+https://www.twobitarcade.net/article/heartrate-sensor-modules/
